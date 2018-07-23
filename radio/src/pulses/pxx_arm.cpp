@@ -24,6 +24,9 @@
 #define PXX_SEND_FAILSAFE                  (1 << 4)
 #define PXX_SEND_RANGECHECK                (1 << 5)
 
+#define PXX_CHANNEL_MAX_INTERVAL_FRAMES 11
+#define MOVEMENT_THRESHOLD 0
+
 const uint16_t CRCTable[]=
 {
   0x0000,0x1189,0x2312,0x329b,0x4624,0x57ad,0x6536,0x74bf,
@@ -303,6 +306,9 @@ inline void putPcmTail(uint8_t port)
 
 inline void setupFramePXX(uint8_t port, uint8_t sendUpperChannels)
 {
+  static int lastChannelValues[16];
+  static uint32_t frameCounter = 0;
+
   uint16_t pulseValue=0, pulseValueLow=0;
 
   initPcmCrc(port);
@@ -335,6 +341,8 @@ inline void setupFramePXX(uint8_t port, uint8_t sendUpperChannels)
 
   /* FLAG2 */
   putPcmByte(port, 0);
+
+  unsigned slot = (frameCounter++ % PXX_CHANNEL_MAX_INTERVAL_FRAMES);
 
   /* CHANNELS */
   for (int i=0; i<8; i++) {
@@ -375,18 +383,31 @@ inline void setupFramePXX(uint8_t port, uint8_t sendUpperChannels)
       }
     }
     else {
-      if (i < sendUpperChannels) {
-        int channel = 8 + g_model.moduleData[port].channelsStart + i;
-        int value = channelOutputs[channel] + 2*PPM_CH_CENTER(channel) - 2*PPM_CENTER;
-        pulseValue = limit(2049, (value * 512 / 682) + 3072, 4094);
+      int channel = g_model.moduleData[port].channelsStart + i;
+      int lowerValue = channelOutputs[channel] + 2 * PPM_CH_CENTER(channel) - 2* PPM_CENTER;
+      int upperValue = channelOutputs[channel + 8] + 2 * PPM_CH_CENTER(channel + 8) - 2 * PPM_CENTER;
+
+      bool sendUpperChannel = false;
+      switch (slot) {
+      case 0:
+
+          break;
+      case 1:
+          sendUpperChannel = true;
+
+          break;
+      default:
+        if (abs(lowerValue - lastChannelValues[i]) + MOVEMENT_THRESHOLD <= abs(upperValue - lastChannelValues[i + 8])) {
+            sendUpperChannel = true;
+        }
       }
-      else if (i < NUM_CHANNELS(port)) {
-        int channel = g_model.moduleData[port].channelsStart + i;
-        int value = channelOutputs[channel] + 2*PPM_CH_CENTER(channel) - 2*PPM_CENTER;
-        pulseValue = limit(1, (value * 512 / 682) + 1024, 2046);
-      }
-      else {
-        pulseValue = 1024;
+
+      if (sendUpperChannel) {
+        pulseValue = limit(2049, (upperValue * 512 / 682) + 3072, 4094);
+        lastChannelValues[i + 8] = upperValue;
+      } else {
+        pulseValue = limit(1, (lowerValue * 512 / 682) + 1024, 2046);
+        lastChannelValues[i] = lowerValue;
       }
     }
 
